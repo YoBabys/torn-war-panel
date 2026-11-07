@@ -1,0 +1,2 @@
+SESSION_SECRET=replace-with-long-random-string
+OWNER_TORN_IDS=1234567

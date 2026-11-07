@@ -1,0 +1,24 @@
+name = "seventh-terminal"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+workers_dev = true
+preview_urls = true
+
+[[kv_namespaces]]
+binding = "WARPANEL"
+id = "b58bb0d4df8a4bf89358bf484c05d221"
+preview_id = "4031374d90c2489299656ec30b38a1c3"
+
+[[durable_objects.bindings]]
+name = "FACTION_DO"
+class_name = "FactionRoom"
+
+[[migrations]]
+tag = "v1_faction_room"
+new_classes = ["FactionRoom"]
+
+[vars]
+SESSION_TTL_SECONDS = "86400"
+STOCK_CACHE_TTL_SECONDS = "600"
+# Set via `wrangler secret put SESSION_SECRET` and `wrangler secret put OWNER_TORN_IDS`
+# OWNER_TORN_IDS = "123456"

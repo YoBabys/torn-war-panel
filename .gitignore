@@ -1,0 +1,11 @@
+node_modules/
+.wrangler/
+.dev.vars
+*.local
+.DS_Store
+web/dist/
+web/.env
+web/.env.local
+.cursor/
+
+.gh-auth-*.txt
