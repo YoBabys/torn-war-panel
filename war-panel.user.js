@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Panel
 // @namespace    https://github.com/YoBabys/torn-war-panel
-// @version      1.5.7
+// @version      1.5.8
 // @description  War panel: chain alerts, enemy roster, FF/retals, medCD, revives, status lights, TornStats
 // @author       YBD
 // @match        https://www.torn.com/*
@@ -1299,7 +1299,13 @@
   function applyMinimized() {
     const mini = document.getElementById('twp-mini');
     const minimized = isMinimized();
-    if (rootEl) rootEl.classList.toggle('twp-collapsed', minimized);
+    if (rootEl) {
+      rootEl.classList.toggle('twp-collapsed', minimized);
+      // Drop any inline display/visibility from old boot hacks so CSS can hide the big panel
+      rootEl.style.removeProperty('display');
+      rootEl.style.removeProperty('visibility');
+      rootEl.style.removeProperty('opacity');
+    }
     if (mini) mini.classList.toggle('visible', minimized);
     document.body.classList.toggle('twp-is-minimized', minimized);
     renderMini();
@@ -2054,31 +2060,15 @@
   // Boot / loops
   // ---------------------------------------------------------------------------
   async function boot() {
-    twpBeacon('War Panel 1.5.5 booting…');
-    console.log('[War Panel] v1.5.5 booting on', location.href);
-
-    // Always expand + clear bad drag position until we know UI works again
-    try {
-      GM_setValue(STORAGE.collapsed, false);
-      GM_deleteValue(STORAGE.panelPos);
-      GM_deleteValue(STORAGE.miniPos);
-    } catch {
-      /* ignore */
-    }
+    twpBeacon('War Panel 1.5.8 booting…');
+    console.log('[War Panel] v1.5.8 booting on', location.href);
 
     // Paint the panel first — never block UI on data loads
     try {
       ensurePanel();
-      setMinimized(false);
-      rootEl.classList.remove('twp-collapsed');
-      rootEl.style.display = 'flex';
-      rootEl.style.visibility = 'visible';
-      rootEl.style.opacity = '1';
-      rootEl.style.right = '0';
-      rootEl.style.top = '0';
-      rootEl.style.left = '';
+      applyMinimized();
       render();
-      twpBeacon('War Panel 1.5.5 UI mounted');
+      twpBeacon('War Panel 1.5.8 UI mounted');
       // Remove beacon after a moment so it doesn't sit on the page
       setTimeout(function () {
         try {
