@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Torn War Panel
 // @namespace    https://github.com/YoBabys/torn-war-panel
-// @version      1.5.6
+// @version      1.5.7
 // @description  War panel: chain alerts, enemy roster, FF/retals, medCD, revives, status lights, TornStats
-// @author       Craig
+// @author       YBD
 // @match        https://www.torn.com/*
 // @match        https://torn.com/*
 // @downloadURL  https://raw.githubusercontent.com/YoBabys/torn-war-panel/main/war-panel.user.js
