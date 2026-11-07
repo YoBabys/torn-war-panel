@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn War Panel
 // @namespace    https://github.com/YoBabys/torn-war-panel
-// @version      1.5.8
+// @version      1.5.9
 // @description  War panel: chain alerts, enemy roster, FF/retals, medCD, revives, status lights, TornStats
 // @author       YBD
 // @match        https://www.torn.com/*
@@ -1092,7 +1092,12 @@
         max-height: calc(100vh - ${CHAT_INSET_PX}px);
         box-shadow: 0 8px 28px rgba(0,0,0,.45);
       }
-      #twp-root.twp-collapsed { display: none; }
+      #twp-root.twp-collapsed {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+      }
       #twp-root * { box-sizing: border-box; }
       #twp-mini {
         position: fixed; top: 72px; right: 12px; z-index: 999999;
@@ -1301,10 +1306,16 @@
     const minimized = isMinimized();
     if (rootEl) {
       rootEl.classList.toggle('twp-collapsed', minimized);
-      // Drop any inline display/visibility from old boot hacks so CSS can hide the big panel
-      rootEl.style.removeProperty('display');
-      rootEl.style.removeProperty('visibility');
-      rootEl.style.removeProperty('opacity');
+      // Must use !important — base #twp-root styles force display/visibility/opacity
+      if (minimized) {
+        rootEl.style.setProperty('display', 'none', 'important');
+        rootEl.style.setProperty('visibility', 'hidden', 'important');
+        rootEl.style.setProperty('opacity', '0', 'important');
+      } else {
+        rootEl.style.removeProperty('display');
+        rootEl.style.removeProperty('visibility');
+        rootEl.style.removeProperty('opacity');
+      }
     }
     if (mini) mini.classList.toggle('visible', minimized);
     document.body.classList.toggle('twp-is-minimized', minimized);
@@ -2060,15 +2071,15 @@
   // Boot / loops
   // ---------------------------------------------------------------------------
   async function boot() {
-    twpBeacon('War Panel 1.5.8 booting…');
-    console.log('[War Panel] v1.5.8 booting on', location.href);
+    twpBeacon('War Panel 1.5.9 booting…');
+    console.log('[War Panel] v1.5.9 booting on', location.href);
 
     // Paint the panel first — never block UI on data loads
     try {
       ensurePanel();
       applyMinimized();
       render();
-      twpBeacon('War Panel 1.5.8 UI mounted');
+      twpBeacon('War Panel 1.5.9 UI mounted');
       // Remove beacon after a moment so it doesn't sit on the page
       setTimeout(function () {
         try {
