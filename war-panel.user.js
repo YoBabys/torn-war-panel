@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Torn War Panel
 // @namespace    https://github.com/YoBabys/torn-war-panel
-// @version      1.6.0
-// @description  War panel: chain alerts, enemy roster, FF/retals, armor, medCD, revives, status lights, TornStats
+// @version      1.6.1
+// @description  War panel: chain alerts, enemy roster, FF/retals, armor, travel ETA, medCD, revives, TornStats
 // @author       YBD
 // @match        https://www.torn.com/*
 // @match        https://torn.com/*
@@ -64,7 +64,7 @@
     }
   }
 
-  twpBeacon('War Panel 1.6.0 script file running…');
+  twpBeacon('War Panel 1.6.1 script file running…');
 
   if (typeof GM_getValue !== 'function' || typeof GM_xmlhttpRequest !== 'function') {
     showBootError(
@@ -100,6 +100,7 @@
     retalMode: 'twp_retal_mode',
     sessionCache: 'twp_session_cache',
     armorCache: 'twp_armor_cache',
+    travelSeen: 'twp_travel_seen',
   };
 
   const SESSION_CACHE_MAX_AGE_MS = 45 * 60 * 1000;
@@ -127,6 +128,7 @@
       retalsError: null,
       ff: safeGet(STORAGE.ffCache, {}) || {},
       armor: safeGet(STORAGE.armorCache, {}) || {},
+      travelSeen: safeGet(STORAGE.travelSeen, {}) || {},
       activity: safeGet(STORAGE.activity, {}) || {},
       medCd: safeGet(STORAGE.medCd, {}) || {},
       hospSeen: {},
@@ -209,6 +211,9 @@
   }
   function saveArmor() {
     GM_setValue(STORAGE.armorCache, state.armor);
+  }
+  function saveTravelSeen() {
+    GM_setValue(STORAGE.travelSeen, state.travelSeen);
   }
   function saveActivity() {
     GM_setValue(STORAGE.activity, state.activity);
@@ -947,36 +952,122 @@
     return '#3ddc84';
   }
 
+  // One-way PI airstrip times (wiki, no travel book). Assume most enemies have PI airstrip.
+  const AIRSTRIP_FLIGHT_SEC = [
+    { keys: ['mexico', 'ciudad', 'juárez', 'juarez'], sec: 17 * 60 },
+    { keys: ['cayman', 'george town', 'georgetown'], sec: 23 * 60 },
+    { keys: ['canada', 'toronto'], sec: 27 * 60 },
+    { keys: ['hawaii', 'honolulu'], sec: 89 * 60 },
+    { keys: ['united kingdom', 'uk', 'london', 'britain', 'england'], sec: 106 * 60 },
+    { keys: ['argentina', 'buenos aires'], sec: 111 * 60 },
+    { keys: ['switzerland', 'zurich', 'zürich'], sec: 116 * 60 },
+    { keys: ['japan', 'tokyo'], sec: 149 * 60 },
+    { keys: ['china', 'beijing'], sec: 160 * 60 },
+    { keys: ['united arab', 'uae', 'dubai'], sec: 180 * 60 },
+    { keys: ['south africa', 'johannesburg'], sec: 197 * 60 },
+  ];
+
+  function lookupAirstripSeconds(place) {
+    const p = String(place || '').toLowerCase();
+    if (!p) return 0;
+    for (const row of AIRSTRIP_FLIGHT_SEC) {
+      if (row.keys.some((k) => p.includes(k))) return row.sec;
+    }
+    return 0;
+  }
+
+  function clearTravelSeen(memberId) {
+    const id = String(memberId);
+    if (!state.travelSeen[id]) return;
+    delete state.travelSeen[id];
+    try {
+      saveTravelSeen();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function travelEstimateRemaining(memberId, place, nowSec) {
+    const id = String(memberId);
+    const destKey = String(place || '').toLowerCase();
+    const duration = lookupAirstripSeconds(place);
+    if (!duration || !destKey) return { remaining: 0, estimated: false, duration: 0 };
+
+    let seen = state.travelSeen[id];
+    if (!seen || seen.dest !== destKey) {
+      seen = { dest: destKey, startedAt: nowSec };
+      state.travelSeen[id] = seen;
+      try {
+        saveTravelSeen();
+      } catch {
+        /* ignore */
+      }
+    }
+    return {
+      remaining: Math.max(0, duration - (nowSec - Number(seen.startedAt || nowSec))),
+      estimated: true,
+      duration,
+    };
+  }
+
   function memberStatus(member, nowSec) {
     const st = member.status || {};
     const stateName = st.state || 'Okay';
     const until = Number(st.until || 0);
-    const remaining = until > nowSec ? until - nowSec : 0;
+    const apiRemaining = until > nowSec ? until - nowSec : 0;
 
     if (stateName === 'Hospital') {
       return {
-        key: remaining > 0 ? 'hosp' : 'okay',
-        label: remaining > 0 ? `Hosp ${formatHms(remaining)}` : 'Okay',
-        remaining,
+        key: apiRemaining > 0 ? 'hosp' : 'okay',
+        label: apiRemaining > 0 ? `Hosp ${formatHms(apiRemaining)}` : 'Okay',
+        remaining: apiRemaining,
         until,
       };
     }
     if (stateName === 'Jail' || stateName === 'Federal') {
       return {
         key: 'jail',
-        label: remaining > 0 ? `Jail ${formatHms(remaining)}` : stateName,
-        remaining,
+        label: apiRemaining > 0 ? `Jail ${formatHms(apiRemaining)}` : stateName,
+        remaining: apiRemaining,
         until,
       };
     }
     if (stateName === 'Abroad' || stateName === 'Traveling') {
-      const place = travelPlaceFromDescription(st.description || st.details || '');
-      const flying = stateName === 'Traveling' || remaining > 0;
-      let label = flying ? 'Travel' : 'Abroad';
-      if (remaining > 0) label += ` ${formatHms(remaining)}`;
-      if (place) label += flying ? ` → ${place}` : ` ${place}`;
-      return { key: 'travel', label, remaining, until, place };
+      const desc = st.description || st.details || '';
+      const place = travelPlaceFromDescription(desc);
+      const descText = stripHtmlText(desc);
+      const descFlying = /travel(?:l)?ing|returning to torn/i.test(descText);
+      const landed = stateName === 'Abroad' && apiRemaining <= 0 && !descFlying;
+
+      if (landed) {
+        clearTravelSeen(member.id);
+        let label = 'Abroad';
+        if (place) label += ` ${place}`;
+        return { key: 'travel', label, remaining: 0, until, place, estimated: false, title: '' };
+      }
+
+      // In the air (Traveling, or Abroad still counting down, or description says flying)
+      let remaining = apiRemaining;
+      let estimated = false;
+      let title = '';
+      if (remaining <= 0) {
+        const est = travelEstimateRemaining(member.id, place, nowSec);
+        remaining = est.remaining;
+        estimated = Boolean(est.estimated);
+        if (estimated) {
+          title = `Est. PI airstrip to ${place || 'destination'} (±3% Torn variance)`;
+        }
+      } else {
+        clearTravelSeen(member.id);
+      }
+
+      let label = estimated ? `Travel ~${formatHms(remaining)}` : `Travel ${formatHms(remaining)}`;
+      if (!remaining && !estimated && !apiRemaining) label = 'Travel';
+      if (place) label += ` → ${place}`;
+      return { key: 'travel', label, remaining, until, place, estimated, title };
     }
+
+    clearTravelSeen(member.id);
     return { key: 'okay', label: 'Okay', remaining: 0, until: 0 };
   }
 
@@ -2142,7 +2233,7 @@
             </div>
             <div>L${m.level}</div>
             <div class="${ffClass}" title="Recorded Fair Fight">${ffText}</div>
-            <div class="${statusClass}">${escapeHtml(m._status.label)}</div>
+            <div class="${statusClass}" title="${escapeHtml(m._status.title || m._status.label || '')}">${escapeHtml(m._status.label)}</div>
             <div class="twp-bs" title="Battle stats">${bs}</div>
           </div>`;
       })
@@ -2226,15 +2317,15 @@
   // Boot / loops
   // ---------------------------------------------------------------------------
   async function boot() {
-    twpBeacon('War Panel 1.6.0 booting…');
-    console.log('[War Panel] v1.6.0 booting on', location.href);
+    twpBeacon('War Panel 1.6.1 booting…');
+    console.log('[War Panel] v1.6.1 booting on', location.href);
 
     // Paint the panel first — never block UI on data loads
     try {
       ensurePanel();
       applyMinimized();
       render();
-      twpBeacon('War Panel 1.6.0 UI mounted');
+      twpBeacon('War Panel 1.6.1 UI mounted');
       // Remove beacon after a moment so it doesn't sit on the page
       setTimeout(function () {
         try {
@@ -2390,7 +2481,7 @@
   }
 
   try {
-    twpBeacon('War Panel 1.6.0 waiting for body…');
+    twpBeacon('War Panel 1.6.1 waiting for body…');
     waitForBody();
   } catch (err) {
     showBootError(err);
