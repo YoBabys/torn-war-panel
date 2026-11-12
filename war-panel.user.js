@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Torn War Panel
 // @namespace    https://github.com/YoBabys/torn-war-panel
-// @version      1.5.9
-// @description  War panel: chain alerts, enemy roster, FF/retals, medCD, revives, status lights, TornStats
+// @version      1.6.0
+// @description  War panel: chain alerts, enemy roster, FF/retals, armor, medCD, revives, status lights, TornStats
 // @author       YBD
 // @match        https://www.torn.com/*
 // @match        https://torn.com/*
@@ -64,7 +64,7 @@
     }
   }
 
-  twpBeacon('War Panel 1.5.5 script file running…');
+  twpBeacon('War Panel 1.6.0 script file running…');
 
   if (typeof GM_getValue !== 'function' || typeof GM_xmlhttpRequest !== 'function') {
     showBootError(
@@ -99,6 +99,7 @@
     medCd: 'twp_med_cd',
     retalMode: 'twp_retal_mode',
     sessionCache: 'twp_session_cache',
+    armorCache: 'twp_armor_cache',
   };
 
   const SESSION_CACHE_MAX_AGE_MS = 45 * 60 * 1000;
@@ -125,6 +126,7 @@
       retals: [],
       retalsError: null,
       ff: safeGet(STORAGE.ffCache, {}) || {},
+      armor: safeGet(STORAGE.armorCache, {}) || {},
       activity: safeGet(STORAGE.activity, {}) || {},
       medCd: safeGet(STORAGE.medCd, {}) || {},
       hospSeen: {},
@@ -204,6 +206,9 @@
 
   function saveFf() {
     GM_setValue(STORAGE.ffCache, state.ff);
+  }
+  function saveArmor() {
+    GM_setValue(STORAGE.armorCache, state.armor);
   }
   function saveActivity() {
     GM_setValue(STORAGE.activity, state.activity);
@@ -753,7 +758,12 @@
     return `${msg} Showing hits on you only.`;
   }
 
-  // Also scrape FF from attack page DOM if present
+  // Also scrape FF / armor from attack page DOM if present
+  function scrapeAttackPage() {
+    scrapeAttackPageFf();
+    scrapeAttackPageArmor();
+  }
+
   function scrapeAttackPageFf() {
     const targetId = getAttackTargetId();
     if (!targetId) return;
@@ -772,6 +782,123 @@
       name: state.members.find((x) => x.id === targetId)?.name || state.ff[id]?.name,
     };
     saveFf();
+  }
+
+  const ARMOR_SET_RULES = [
+    { set: 'EOD', re: /\b(eod|edo)\b|explosive\s*ordnance/i },
+    { set: 'Delta', re: /\bdelta\b/i },
+    { set: 'Symbiotic', re: /\bsymbiotic\b|\bsymbiont\b/i },
+    { set: 'Wyatt', re: /\bwyatt\b/i },
+    { set: 'Assault', re: /\bassault\b/i },
+    { set: 'Riot', re: /\briot\b/i },
+    { set: 'Combat', re: /\bcombat\b/i },
+    { set: 'Tactical', re: /\btactical\b/i },
+    { set: 'Military', re: /\bmilitary\b/i },
+    { set: 'Liquid', re: /\bliquid\b/i },
+    { set: 'Sublimina', re: /\bsublimina\b/i },
+  ];
+
+  function classifyArmorSet(pieces) {
+    if (!pieces?.length) return null;
+    const blob = pieces.join(' ');
+    const hits = [];
+    for (const rule of ARMOR_SET_RULES) {
+      if (rule.re.test(blob)) hits.push(rule.set);
+    }
+    if (hits.includes('EOD')) return 'EOD';
+    if (hits.length === 1) return hits[0];
+    if (hits.length > 1) return 'Mixed';
+    // Unknown named gear — use first word of first piece as a short tip
+    const first = String(pieces[0] || '').trim().split(/\s+/)[0];
+    return first ? first.slice(0, 12) : 'Gear';
+  }
+
+  function collectArmorPieceNames(root) {
+    const names = [];
+    const seen = new Set();
+    const push = (raw) => {
+      let s = String(raw || '')
+        .replace(/^Attack with\s+/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!s || s.length < 3) return;
+      // Skip non-item chrome
+      if (/^(helmet|chest|pants|boots|gloves|armou?r|empty|unknown)$/i.test(s)) return;
+      const key = s.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      names.push(s);
+    };
+
+    const nodes = root.querySelectorAll(
+      '[title], [aria-label], img[alt], [class*="armour"] img, [class*="armor"] img'
+    );
+    nodes.forEach((el) => {
+      push(el.getAttribute('aria-label'));
+      push(el.getAttribute('title'));
+      if (el.tagName === 'IMG') push(el.getAttribute('alt'));
+    });
+    return names;
+  }
+
+  function findDefenderArmorRoot() {
+    const defenderMarker = document.querySelector(
+      '#defender_Primary, #defender_Secondary, #defender_Melee, #defender_Temporary, [id^="defender_"]'
+    );
+    let area =
+      defenderMarker?.closest('[class*="playerArea"]') ||
+      defenderMarker?.closest('[class*="player"]') ||
+      null;
+    if (!area) {
+      const wraps = [...document.querySelectorAll('[class*="armoursWrap"], [class*="armourContainer"]')];
+      if (wraps.length) {
+        // Prefer the last armours wrap (defender is usually on the right)
+        area = wraps[wraps.length - 1];
+      }
+    }
+    if (!area) return null;
+    return (
+      area.querySelector('[class*="armoursWrap"]') ||
+      area.querySelector('[class*="armourContainer"]') ||
+      area
+    );
+  }
+
+  function scrapeAttackPageArmor() {
+    const targetId = getAttackTargetId();
+    if (!targetId) return;
+    const root = findDefenderArmorRoot();
+    if (!root) return;
+    let pieces = collectArmorPieceNames(root);
+    if (!pieces.length) {
+      // Fallback: set names sometimes appear only in nearby text / tooltips
+      const blob = `${root.getAttribute('title') || ''} ${root.innerText || ''}`;
+      for (const rule of ARMOR_SET_RULES) {
+        if (rule.re.test(blob)) pieces.push(rule.set);
+      }
+      pieces = [...new Set(pieces)];
+    }
+    if (!pieces.length) return;
+    const set = classifyArmorSet(pieces);
+    if (!set) return;
+    const id = String(targetId);
+    const prev = state.armor[id];
+    // Don't downgrade a known EOD to a weaker/unknown scrape in the same session unless pieces look richer
+    if (prev?.set === 'EOD' && set !== 'EOD' && (prev.pieces?.length || 0) >= pieces.length) {
+      return;
+    }
+    state.armor[id] = {
+      set,
+      pieces,
+      at: Math.floor(Date.now() / 1000),
+      name: state.members.find((x) => x.id === targetId)?.name || prev?.name,
+    };
+    saveArmor();
+    try {
+      renderRoster();
+    } catch {
+      /* panel may not be ready */
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1002,6 +1129,7 @@
       const status = memberStatus(m, nowSec);
       const spy = state.spies[String(m.id)] || null;
       const ff = state.ff[String(m.id)] || null;
+      const armor = state.armor[String(m.id)] || null;
       const presence = presenceStatus(m, nowSec);
       const med = medCdInfo(m, nowSec);
       const revive = reviveInfo(m);
@@ -1010,6 +1138,7 @@
         _status: status,
         _spy: spy,
         _ff: ff,
+        _armor: armor,
         _presence: presence,
         _med: med,
         _revive: revive,
@@ -1221,12 +1350,22 @@
         padding: 5px 8px; border-bottom: 1px solid #242830;
       }
       .twp-row:hover { background: #22262e; }
+      .twp-name-line {
+        display: flex; align-items: baseline; gap: 6px; min-width: 0;
+      }
       .twp-row a {
         color: #7eb6ff; text-decoration: none; font-weight: 600;
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        display: inline-block; max-width: 100%;
+        display: inline-block; min-width: 0; max-width: 100%;
       }
       .twp-row a:hover { text-decoration: underline; }
+      .twp-armor {
+        flex: 0 0 auto;
+        font-size: 9px; font-weight: 800; letter-spacing: 0.02em;
+        color: #9aa0a6; text-transform: uppercase;
+      }
+      .twp-armor.eod { color: #ff5c5c; }
+      .twp-armor.mixed { color: #f0c674; }
       .twp-status-okay { color: #3ddc84; }
       .twp-status-hosp { color: #ff5c5c; font-variant-numeric: tabular-nums; }
       .twp-status-jail { color: #c9a0ff; }
@@ -1243,6 +1382,7 @@
       .twp-tag.rev-on { background: transparent; color: #3ddc84; padding: 0; }
       .twp-tag.rev-off { background: transparent; color: #ff5c5c; padding: 0; }
       .twp-tag.med { background: #1e3a4a; color: #7ec8e3; font-weight: 600; }
+      .twp-tag.armor-eod { background: #4a1515; color: #ff8a8a; }
       .twp-presence {
         width: 10px; height: 10px; border-radius: 50%;
         justify-self: center;
@@ -1496,7 +1636,7 @@
           <button class="twp-btn" type="button" id="twp-reset-pos">Reset position</button>
         </div>
         <p class="hint">
-          Click a name to open their attack page. Lights: green Online, yellow Away, red Offline.
+          Click a name to open their attack page — armor seen there is saved next to their name. Lights: green Online, yellow Away, red Offline.
           1:30 chain → warning beep (orange timer until 1:00). 45s → urgent beep.
         </p>
       </div>
@@ -1720,7 +1860,7 @@
     on(rootEl.querySelector('#twp-refresh'), 'click', async () => {
       try {
         await Promise.all([loadChain(), loadWarAndRoster(), loadAttacks()]);
-        scrapeAttackPageFf();
+        scrapeAttackPage();
         render();
       } catch (e) {
         state.error = e.message;
@@ -1978,11 +2118,26 @@
           );
         }
 
+        const armorSet = m._armor?.set;
+        const armorClass =
+          armorSet === 'EOD' ? 'twp-armor eod' : armorSet === 'Mixed' ? 'twp-armor mixed' : 'twp-armor';
+        const armorTitle = m._armor
+          ? `${(m._armor.pieces || []).join(', ') || armorSet}${
+              m._armor.at ? ` · seen ${new Date(m._armor.at * 1000).toLocaleString()}` : ''
+            }`
+          : '';
+        const armorHtml = armorSet
+          ? `<span class="${armorClass}" title="${escapeHtml(armorTitle)}">${escapeHtml(armorSet)}</span>`
+          : '';
+
         return `
           <div class="twp-row" data-id="${m.id}">
             <span class="twp-presence ${m._presence.level}" title="${escapeHtml(m._presence.title)}"></span>
             <div>
-              <a class="twp-attack-link" data-user-id="${m.id}" href="${attack}" title="Open attack page">${escapeHtml(m.name)}</a>
+              <div class="twp-name-line">
+                <a class="twp-attack-link" data-user-id="${m.id}" href="${attack}" title="Open attack page">${escapeHtml(m.name)}</a>
+                ${armorHtml}
+              </div>
               <div class="twp-tags">${tags.join('')}</div>
             </div>
             <div>L${m.level}</div>
@@ -2013,7 +2168,7 @@
     if (onAttack && targetId && getTornKey()) {
       fab.classList.add('visible');
       fab.dataset.targetId = String(targetId);
-      scrapeAttackPageFf();
+      scrapeAttackPage();
     } else {
       fab.classList.remove('visible');
     }
@@ -2044,7 +2199,7 @@
     }
     const member = state.members.find((m) => m.id === targetId);
     const targetName = member?.name || null;
-    scrapeAttackPageFf();
+    scrapeAttackPage();
     state.assists[String(state.me.id)] = {
       attackerId: state.me.id,
       attackerName: state.me.name,
@@ -2071,15 +2226,15 @@
   // Boot / loops
   // ---------------------------------------------------------------------------
   async function boot() {
-    twpBeacon('War Panel 1.5.9 booting…');
-    console.log('[War Panel] v1.5.9 booting on', location.href);
+    twpBeacon('War Panel 1.6.0 booting…');
+    console.log('[War Panel] v1.6.0 booting on', location.href);
 
     // Paint the panel first — never block UI on data loads
     try {
       ensurePanel();
       applyMinimized();
       render();
-      twpBeacon('War Panel 1.5.9 UI mounted');
+      twpBeacon('War Panel 1.6.0 UI mounted');
       // Remove beacon after a moment so it doesn't sit on the page
       setTimeout(function () {
         try {
@@ -2120,7 +2275,7 @@
     try {
       await loadIdentity();
       await Promise.all([loadChain(), loadWarAndRoster(), loadAttacks()]);
-      scrapeAttackPageFf();
+      scrapeAttackPage();
       state.error = null;
       saveSessionCache();
     } catch (e) {
@@ -2141,6 +2296,13 @@
       renderRoster();
       renderAssists();
       renderAssistFab();
+      try {
+        if (/sid=attack|loader\.php\?sid=attack|attack\.php/i.test(location.href + location.hash)) {
+          scrapeAttackPage();
+        }
+      } catch {
+        /* ignore */
+      }
     }, UI_TICK_MS);
 
     timers.chain = setInterval(async () => {
@@ -2187,7 +2349,7 @@
       window.addEventListener('hashchange', () => {
         try {
           renderAssistFab();
-          scrapeAttackPageFf();
+          scrapeAttackPage();
         } catch (e) {
           console.warn('[War Panel] hashchange', e);
         }
@@ -2202,7 +2364,7 @@
         setTimeout(() => {
           try {
             renderAssistFab();
-            scrapeAttackPageFf();
+            scrapeAttackPage();
           } catch (e) {
             console.warn('[War Panel] pushState', e);
           }
@@ -2228,7 +2390,7 @@
   }
 
   try {
-    twpBeacon('War Panel 1.5.5 waiting for body…');
+    twpBeacon('War Panel 1.6.0 waiting for body…');
     waitForBody();
   } catch (err) {
     showBootError(err);
